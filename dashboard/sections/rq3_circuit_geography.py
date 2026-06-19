@@ -1,196 +1,148 @@
-# dashboard/sections/rq3_circuit_geography.py
-
 import streamlit as st
 import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
-from utils import f1_fig
 
-def render_rq3(df: pd.DataFrame):
-    st.markdown("## 🟩 RQ3 — CIRCUIT & GEOGRAPHICAL PERFORMANCE")
+def render_rq3(data):
+    st.title("🌍 RQ3 — Circuit Geography & Regional Performance")
 
-    if df.empty:
-        st.info("No data available for current filters in RQ3.")
+    # GOLD tables
+    circuits = data["circuits"]          # GOLD dim_circuits
+    races = data["races"]                # GOLD dim_races
+    results = data["results"]            # GOLD fact_session_results
+
+    # ---------------------------------------------------------
+    # VALIDATION
+    # ---------------------------------------------------------
+    if circuits.empty or races.empty or results.empty:
+        st.error("❌ Missing required Gold tables. Please run the full pipeline first.")
         return
 
     # ---------------------------------------------------------
-    # FIX: unify nationality_region column
+    # PREPARE RACE‑LEVEL POINTS
     # ---------------------------------------------------------
-    if "nationality_region" not in df.columns:
-        if "nationality_region_x" in df.columns:
-            df["nationality_region"] = df["nationality_region_x"]
-        elif "nationality_region_y" in df.columns:
-            df["nationality_region"] = df["nationality_region_y"]
-        else:
-            df["nationality_region"] = "Other"
-
-    # ---------------------------------------------------------
-    # KPI TILES — GEOGRAPHICAL SNAPSHOT
-    # ---------------------------------------------------------
-    col1, col2, col3 = st.columns(3)
-
-    avg_points = df["points"].mean()
-    top_country = (
-        df.groupby("country_name")["points"]
-        .mean()
-        .sort_values(ascending=False)
-        .index[0]
-    )
-    top_circuit = (
-        df.groupby("circuit_name")["points"]
-        .mean()
-        .sort_values(ascending=False)
-        .index[0]
+    race_points = (
+        results.groupby(["season", "round"], dropna=False)["points"]
+        .sum()
+        .reset_index()
     )
 
-    with col1:
-        st.metric("Avg Points per Race", f"{avg_points:0.2f}")
-    with col2:
-        st.metric("Top Performing Country", top_country)
-    with col3:
-        st.metric("Top Performing Circuit", top_circuit)
-
-    st.markdown("---")
+    # ---------------------------------------------------------
+    # MERGE RACES + CIRCUITS + POINTS
+    # GOLD dim_races contains: circuit_id, race_name, race_date, country
+    # GOLD dim_circuits contains: circuit_id, circuit_name, latitude, longitude, country_name
+    # ---------------------------------------------------------
+    df = (
+        races
+        .merge(circuits, on="circuit_id", how="left", suffixes=("_race", "_circuit"))
+        .merge(race_points, on=["season", "round"], how="left")
+    )
 
     # ---------------------------------------------------------
-    # RQ3.1 — Circuit Competitiveness Index (Std Dev of Points)
+    # COUNTRY COLUMN FIX
     # ---------------------------------------------------------
-    st.markdown("### 📌 RQ3.1 — Circuit Competitiveness Index")
+    if "country_name" in df.columns:
+        country_col = "country_name"
+    elif "country" in df.columns:
+        country_col = "country"
+    else:
+        country_col = None
+
+    # ---------------------------------------------------------
+    # 1) COUNTRY‑LEVEL GEO PERFORMANCE MAP
+    # ---------------------------------------------------------
+    st.subheader("🗺️ Circuit Performance by Country")
+
+    if country_col:
+        fig = px.choropleth(
+            df,
+            locations=country_col,
+            locationmode="country names",
+            color="points",
+            hover_name="race_name",
+            title="Circuit Performance — Points by Host Country",
+            color_continuous_scale="Viridis",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("⚠ No country column found — cannot render geo map.")
+
+    # ---------------------------------------------------------
+    # 2) CIRCUIT COMPETITIVENESS INDEX (CCI)
+    # ---------------------------------------------------------
+    st.subheader("🔥 Circuit Competitiveness Index (CCI)")
 
     circuit_comp = (
-        df.groupby("circuit_name")["points"]
+        results
+        .merge(races[["season", "round", "circuit_id"]], on=["season", "round"])
+        .groupby("circuit_id")["final_position"]
         .std()
         .reset_index()
-        .rename(columns={"points": "points_std"})
-        .sort_values("points_std", ascending=False)
+        .rename(columns={"final_position": "competitiveness"})
     )
 
-    fig1 = f1_fig("Circuit Competitiveness Index (Higher = More Variable)", height=500)
+    circuit_comp["competitiveness"] = circuit_comp["competitiveness"].fillna(0)
 
-    fig1.add_trace(
-        go.Bar(
-            x=circuit_comp["circuit_name"].head(20),
-            y=circuit_comp["points_std"].head(20),
-            marker=dict(
-                color=px.colors.qualitative.Dark24[:len(circuit_comp.head(20))]
-            ),
-            hovertemplate="<b>%{x}</b><br>Std Dev: %{y:.2f}<extra></extra>"
-        )
+    circuit_comp = circuit_comp.merge(
+        circuits[["circuit_id", "circuit_name"]],
+        on="circuit_id",
+        how="left"
     )
 
-    fig1.update_layout(
-        xaxis_title="Circuit",
-        yaxis_title="Points Standard Deviation",
-        xaxis_tickangle=-45
+    fig2 = px.bar(
+        circuit_comp.sort_values("competitiveness"),
+        x="circuit_name",
+        y="competitiveness",
+        title="Circuit Competitiveness Index (Lower = Tighter Racing)",
+        color="competitiveness",
+        color_continuous_scale="Plasma",
     )
-
-    st.plotly_chart(fig1, use_container_width=True)
-
-    # ---------------------------------------------------------
-    # RQ3.2 — Country Performance (Avg Points)
-    # ---------------------------------------------------------
-    st.markdown("### 📌 RQ3.2 — Average Points by Host Country")
-
-    country_perf = (
-        df.groupby("country_name", as_index=False)["points"]
-        .mean()
-        .sort_values("points", ascending=False)
-    )
-
-    fig2 = f1_fig("Average Points by Host Country", height=500)
-
-    fig2.add_trace(
-        go.Bar(
-            x=country_perf["country_name"],
-            y=country_perf["points"],
-            marker=dict(
-                color=px.colors.qualitative.Set3[:len(country_perf)]
-            ),
-            hovertemplate="<b>%{x}</b><br>Avg Points: %{y:.2f}<extra></extra>"
-        )
-    )
-
-    fig2.update_layout(
-        xaxis_title="Country",
-        yaxis_title="Average Points",
-        xaxis_tickangle=-45
-    )
-
     st.plotly_chart(fig2, use_container_width=True)
 
     # ---------------------------------------------------------
-    # RQ3.3 — Driver Region vs Performance
+    # 3) COUNTRY‑WISE PERFORMANCE
     # ---------------------------------------------------------
-    st.markdown("### 📌 RQ3.3 — Driver Region vs Performance")
+    st.subheader("🌎 Country‑Wise Performance")
 
-    region_perf = (
-        df.groupby("nationality_region", as_index=False)["points"]
-        .mean()
-        .sort_values("points", ascending=False)
-    )
-
-    fig3 = f1_fig("Driver Region vs Performance", height=450)
-
-    fig3.add_trace(
-        go.Bar(
-            x=region_perf["nationality_region"],
-            y=region_perf["points"],
-            marker=dict(
-                color=px.colors.qualitative.Pastel[:len(region_perf)]
-            ),
-            hovertemplate="<b>%{x}</b><br>Avg Points: %{y:.2f}<extra></extra>"
-        )
-    )
-
-    fig3.update_layout(
-        xaxis_title="Region",
-        yaxis_title="Average Points",
-    )
-
-    st.plotly_chart(fig3, use_container_width=True)
-
-    # ---------------------------------------------------------
-    # RQ3.4 — Geographic Map of Race Performance
-    # ---------------------------------------------------------
-    st.markdown("### 🌍 RQ3.4 — Geographic Map of Race Performance")
-
-    if "latitude" in df.columns and "longitude" in df.columns:
-        map_df = (
-            df.groupby(["country_name", "latitude", "longitude"], as_index=False)["points"]
-            .mean()
+    if country_col:
+        region_perf = (
+            df.groupby(country_col)["points"]
+            .sum()
+            .reset_index()
+            .sort_values("points", ascending=False)
         )
 
-        fig4 = px.scatter_geo(
-            map_df,
-            lat="latitude",
-            lon="longitude",
-            color="country_name",
-            hover_name="country_name",
-            size="points",
-            projection="natural earth",
-            color_discrete_sequence=px.colors.qualitative.Bold,
-            title="Average Points by Country (Geographical View)"
+        fig3 = px.bar(
+            region_perf,
+            x=country_col,
+            y="points",
+            title="Total Points Awarded by Country",
+            color="points",
+            color_continuous_scale="Inferno",
         )
-
-        fig4.update_layout(
-            template="plotly_dark",
-            height=550,
-        )
-
-        st.plotly_chart(fig4, use_container_width=True)
-    else:
-        st.info("Geographical coordinates not available for map visualization.")
+        st.plotly_chart(fig3, use_container_width=True)
 
     # ---------------------------------------------------------
-    # RQ3 — Insights
+    # 4) DRIVER–CIRCUIT AFFINITY MAP
     # ---------------------------------------------------------
-    st.markdown("### 🧠 RQ3 — Key Insights")
+    st.subheader("🔗 Driver–Circuit Affinity")
 
-    st.success(
-        """
-        - Circuits with **high competitiveness index** tend to produce unpredictable race outcomes.  
-        - Certain countries consistently yield **higher average points**, indicating track familiarity or car suitability.  
-        - Driver regions show clear performance clusters — some regions outperform others across seasons.  
-        - The **geographical map** highlights global hotspots of strong race performance.  
-        """
+    driver_affinity = (
+        results
+        .merge(races[["season", "round", "circuit_id"]], on=["season", "round"])
+        .merge(circuits[["circuit_id", "circuit_name"]], on="circuit_id")
+        .groupby(["driver_name", "circuit_name"], dropna=False)["points"]
+        .sum()
+        .reset_index()
     )
+
+    fig4 = px.density_heatmap(
+        driver_affinity,
+        x="circuit_name",
+        y="driver_name",
+        z="points",
+        title="Driver–Circuit Affinity Heatmap",
+        color_continuous_scale="Magma",
+    )
+    st.plotly_chart(fig4, use_container_width=True)
+
+    st.success("RQ3 analysis loaded successfully.")

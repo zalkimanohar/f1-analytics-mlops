@@ -1,139 +1,145 @@
-# dashboard/sections/rq2_race_outcomes.py
-
 import streamlit as st
 import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
-from utils import f1_fig
 
-def render_rq2(df: pd.DataFrame):
-    st.markdown("## 🟦 RQ2 — RACE EXECUTION & OUTCOME DRIVERS")
+def render_rq2(data):
+    st.title("🏁 RQ2 — Race Outcomes & Competitiveness")
 
-    if df.empty:
-        st.info("No data available for current filters in RQ2.")
+    # ---------------------------------------------------------
+    # EXTRACT GOLD TABLES FROM DICT
+    # ---------------------------------------------------------
+    results = data["results"].copy()     # fact_session_results
+    races = data["races"].copy()         # dim_races
+
+    # ---------------------------------------------------------
+    # VALIDATION
+    # ---------------------------------------------------------
+    if results.empty or races.empty:
+        st.error("❌ Missing required Gold tables (results or races).")
         return
 
     # ---------------------------------------------------------
-    # KPI TILES — EXECUTION SNAPSHOT
+    # MERGE RESULTS + RACES TO RESTORE race_name, race_date
     # ---------------------------------------------------------
-    col1, col2, col3, col4 = st.columns(4)
-
-    avg_grid = df["grid_position"].mean()
-    avg_final = df["final_position"].mean()
-    avg_gain = df["positions_gained"].mean()
-
-    dnf_mask = df["status"].str.contains("DNF", case=False, na=False)
-    dnf_rate_overall = dnf_mask.mean() * 100
-
-    with col1:
-        st.metric("Avg Grid Position", f"{avg_grid:0.1f}")
-    with col2:
-        st.metric("Avg Final Position", f"{avg_final:0.1f}")
-    with col3:
-        st.metric("Avg Positions Gained", f"{avg_gain:0.2f}")
-    with col4:
-        st.metric("DNF Rate", f"{dnf_rate_overall:0.1f}%")
-
-    st.markdown("---")
+    df = (
+        results
+        .merge(
+            races[["season", "round", "race_name", "race_date"]],
+            on=["season", "round"],
+            how="left"
+        )
+    )
 
     # ---------------------------------------------------------
-    # RQ2.1 — Grid vs Final Position (Scatter)
+    # 1) GRID vs FINAL POSITION
     # ---------------------------------------------------------
-    st.markdown("### 📌 RQ2.1 — Grid vs Final Position")
+    st.subheader("📉 Grid Position vs Final Position")
 
-    fig_scatter = px.scatter(
+    fig = px.scatter(
         df,
         x="grid_position",
         y="final_position",
-        color="driver_name",
-        title="Grid vs Final Position (Lower is Better)",
-        opacity=0.65,
-        hover_data=["season", "round", "race_name", "constructor_name", "points"],
-        color_discrete_sequence=px.colors.qualitative.Dark24
+        color="points",
+        hover_name="race_name",
+        title="Grid Position vs Final Position",
+        color_continuous_scale="Turbo",
+        trendline="ols",
     )
-
-    fig_scatter.update_layout(
-        template="plotly_dark",
-        height=500,
-        legend_title="Driver",
-        xaxis_title="Grid Position (Start)",
-        yaxis_title="Final Position (Finish)",
-    )
-    fig_scatter.update_yaxes(autorange="reversed")
-
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    fig.update_yaxes(autorange="reversed")  # P1 at top
+    st.plotly_chart(fig, use_container_width=True)
 
     # ---------------------------------------------------------
-    # RQ2.2 — Constructor DNF Rate (Bar)
+    # 2) TOTAL POINTS PER RACE
     # ---------------------------------------------------------
-    st.markdown("### 📌 RQ2.2 — Constructor DNF Rate")
+    st.subheader("🔥 Race Competitiveness — Total Points Awarded")
+
+    race_points = (
+        df.groupby(["season", "round", "race_name"], dropna=False)["points"]
+        .sum()
+        .reset_index()
+        .sort_values(["season", "round"])
+    )
+
+    fig2 = px.line(
+        race_points,
+        x="round",
+        y="points",
+        hover_name="race_name",
+        title=f"Total Points Awarded — Season {df['season'].iloc[0]}",
+        markers=True,
+        color_discrete_sequence=["#ff1e00"],
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # ---------------------------------------------------------
+    # 3) DNF RATE OVER TIME
+    # ---------------------------------------------------------
+    st.subheader("💥 DNF Rate by Season")
+
+    df["is_dnf"] = df["status"].str.contains("DNF", case=False, na=False)
 
     dnf_rate = (
-        df.assign(is_dnf=dnf_mask)
-        .groupby("constructor_name", as_index=False)["is_dnf"]
+        df.groupby("season")["is_dnf"]
         .mean()
-        .rename(columns={"is_dnf": "dnf_rate"})
+        .reset_index()
     )
 
-    dnf_rate["dnf_rate_pct"] = dnf_rate["dnf_rate"] * 100
-    dnf_rate = dnf_rate.sort_values("dnf_rate_pct", ascending=False)
-
-    fig_dnf = px.bar(
+    fig3 = px.area(
         dnf_rate,
+        x="season",
+        y="is_dnf",
+        title="DNF Rate Over Seasons",
+        color_discrete_sequence=["#ff6600"],
+    )
+    st.plotly_chart(fig3, use_container_width=True)
+
+    # ---------------------------------------------------------
+    # 4) CONSTRUCTOR RELIABILITY INDEX
+    # ---------------------------------------------------------
+    st.subheader("🏆 Constructor Reliability Index")
+
+    constructor_reliability = (
+        df.groupby(["constructor_id", "constructor_name"], dropna=False)
+        .agg(
+            races=("constructor_id", "count"),
+            dnfs=("is_dnf", "sum")
+        )
+        .reset_index()
+    )
+
+    constructor_reliability["reliability"] = (
+        1 - constructor_reliability["dnfs"] / constructor_reliability["races"]
+    )
+
+    fig4 = px.bar(
+        constructor_reliability.sort_values("reliability", ascending=False),
         x="constructor_name",
-        y="dnf_rate_pct",
-        title="Constructor DNF Rate (%)",
-        color="constructor_name",
-        color_discrete_sequence=px.colors.qualitative.Set3,
-        labels={"dnf_rate_pct": "DNF Rate (%)", "constructor_name": "Constructor"},
+        y="reliability",
+        title="Constructor Reliability Index",
+        color="reliability",
+        color_continuous_scale="Greens",
     )
-
-    fig_dnf.update_layout(
-        template="plotly_dark",
-        height=450,
-        xaxis_tickangle=-45,
-    )
-
-    st.plotly_chart(fig_dnf, use_container_width=True)
+    st.plotly_chart(fig4, use_container_width=True)
 
     # ---------------------------------------------------------
-    # RQ2.3 — Driver Recovery Index (Avg Positions Gained)
+    # 5) DRIVER DNF HEATMAP
     # ---------------------------------------------------------
-    st.markdown("### 📌 RQ2.3 — Driver Recovery Index")
+    st.subheader("🧨 Driver DNF Heatmap")
 
-    recovery = (
-        df.groupby("driver_name", as_index=False)["positions_gained"]
-        .mean()
-        .sort_values("positions_gained", ascending=False)
+    driver_dnf = (
+        df.groupby(["driver_name", "status"], dropna=False)
+        .size()
+        .reset_index(name="count")
     )
 
-    fig_recovery = px.bar(
-        recovery,
-        x="positions_gained",
+    fig5 = px.density_heatmap(
+        driver_dnf,
+        x="status",
         y="driver_name",
-        orientation="h",
-        title="Average Positions Gained from Grid to Finish",
-        color="driver_name",
-        color_discrete_sequence=px.colors.qualitative.Pastel,
-        labels={"positions_gained": "Avg Positions Gained", "driver_name": "Driver"},
+        z="count",
+        title="Driver DNF / Status Heatmap",
+        color_continuous_scale="Inferno",
     )
+    st.plotly_chart(fig5, use_container_width=True)
 
-    fig_recovery.update_layout(
-        template="plotly_dark",
-        height=600,
-    )
-
-    st.plotly_chart(fig_recovery, use_container_width=True)
-
-    # ---------------------------------------------------------
-    # RQ2 — Insights
-    # ---------------------------------------------------------
-    st.markdown("### 🧠 RQ2 — Key Execution Insights")
-
-    st.success(
-        """
-        - **Grid vs Final Position** highlights drivers and teams that consistently convert strong starts into strong finishes.  
-        - **Constructor DNF Rate** surfaces reliability risk—high DNF constructors may need engineering or strategy focus.  
-        - **Driver Recovery Index** identifies overtaking specialists who gain positions regardless of starting slot.  
-        """
-    )
+    st.success("RQ2 analysis loaded successfully.")

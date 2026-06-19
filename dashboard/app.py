@@ -1,157 +1,138 @@
 import streamlit as st
-from utils import load_f1_gold
+from theme import set_theme
+from utils import load_table
 
+# Section imports
+from sections.executive_summary import render_executive_summary
 from sections.rq1_driver_constructor import render_rq1
 from sections.rq2_race_outcomes import render_rq2
 from sections.rq3_circuit_geography import render_rq3
 from sections.rq4_sprint_race import render_rq4
 from sections.rq5_cross_dataset import render_rq5
-from sections.executive_summary import render_summary
 
+# Clear cache to avoid stale GOLD schemas
+st.cache_data.clear()
 
 # ---------------------------------------------------------
-# PAGE CONFIG
+# 1. PAGE CONFIG + THEME
 # ---------------------------------------------------------
 st.set_page_config(
-    page_title="F1 Performance Intelligence Dashboard",
+    page_title="F1 Analytics Dashboard",
     page_icon="🏎️",
     layout="wide"
 )
 
-st.title("🏎️ F1 PERFORMANCE INTELLIGENCE DASHBOARD")
-st.markdown("_A Multi-Layered Analysis of Drivers, Constructors, Circuits & Strategy (RQ1–RQ5)_")
-
+set_theme()
 
 # ---------------------------------------------------------
-# LOAD DATA
+# 2. LOAD ALL REQUIRED DATASETS (Gold + Silver)
 # ---------------------------------------------------------
 @st.cache_data
-def get_data():
-    return load_f1_gold()
+def load_all_data():
+    return {
+        "drivers": load_table("drivers"),
+        "constructors": load_table("constructors"),
+        "races": load_table("races"),
+        "results": load_table("results"),
+        "circuits": load_table("circuits"),
+        "sprints": load_table("sprints"),
+    }
 
-df = get_data()
-
-
-# ---------------------------------------------------------
-# SIDEBAR FILTERS
-# ---------------------------------------------------------
-with st.sidebar:
-    st.header("🎛️ Global Filters")
-
-    # -------------------------------
-    # QUICK SEASON SELECTOR
-    # -------------------------------
-    st.markdown("### Quick Season Filters")
-
-    quick = st.radio(
-        "Select Range",
-        ["Last 5 Seasons", "Last 10 Seasons", "All Seasons"],
-        horizontal=True
-    )
-
-    all_seasons = sorted(df["season"].unique(), reverse=True)
-
-    if quick == "Last 5 Seasons":
-        default_seasons = all_seasons[:5]
-    elif quick == "Last 10 Seasons":
-        default_seasons = all_seasons[:10]
-    else:
-        default_seasons = all_seasons
-
-    # -------------------------------
-    # SEASON MULTISELECT
-    # -------------------------------
-    seasons = st.multiselect(
-        "Season (Descending Order)",
-        all_seasons,
-        default=default_seasons,
-        placeholder="Select Seasons"
-    )
-
-    # -------------------------------
-    # TOP 10 DRIVERS DEFAULT
-    # -------------------------------
-    top_drivers = (
-        df.groupby("driver_name")["points"]
-        .sum()
-        .sort_values(ascending=False)
-        .head(10)
-        .index
-    )
-
-    drivers = st.multiselect(
-        "Driver",
-        sorted(df["driver_name"].unique()),
-        default=top_drivers
-    )
-
-    constructors = st.multiselect(
-        "Constructor",
-        sorted(df["constructor_name"].unique())
-    )
-
-    circuits = st.multiselect(
-        "Circuit",
-        sorted(df["circuit_name"].dropna().unique())
-    )
-
-    final_pos = st.slider(
-        "Final Position",
-        int(df["final_position"].min()),
-        int(df["final_position"].max()),
-        (int(df["final_position"].min()), int(df["final_position"].max()))
-    )
-
-    grid_pos = st.slider(
-        "Grid Position",
-        int(df["grid_position"].min()),
-        int(df["grid_position"].max()),
-        (int(df["grid_position"].min()), int(df["grid_position"].max()))
-    )
-
-    points_range = st.slider(
-        "Points",
-        float(df["points"].min()),
-        float(df["points"].max()),
-        (float(df["points"].min()), float(df["points"].max()))
-    )
-
-    status = st.multiselect(
-        "Status (DNF/Finished)",
-        sorted(df["status"].unique())
-    )
-
+data = load_all_data()
 
 # ---------------------------------------------------------
-# APPLY FILTERS
+# 3. GLOBAL FILTERS (ONLY SEASON + SLIDERS)
 # ---------------------------------------------------------
-filtered = df[df["season"].isin(seasons)]
+st.sidebar.title("🔍 Filters")
 
-if circuits:
-    filtered = filtered[filtered["circuit_name"].isin(circuits)]
+drivers = data["drivers"]
+constructors = data["constructors"]
+races = data["races"]
+results = data["results"]
 
-if drivers:
-    filtered = filtered[filtered["driver_name"].isin(drivers)]
+# Ensure GOLD schema is correct
+if "season" not in races.columns:
+    st.error("❌ Races table missing 'season' column — check Gold layer.")
+    st.stop()
 
-if constructors:
-    filtered = filtered[filtered["constructor_name"].isin(constructors)]
+# Remove 2026 from options
+season_list = sorted([s for s in races["season"].dropna().unique() if s != 2026])
 
-filtered = filtered[
-    (filtered["final_position"].between(*final_pos)) &
-    (filtered["grid_position"].between(*grid_pos)) &
-    (filtered["points"].between(*points_range))
+# Default seasons
+default_seasons = [s for s in [2023, 2024, 2025] if s in season_list]
+
+seasons = st.sidebar.multiselect(
+    "Season",
+    season_list,
+    default=default_seasons
+)
+
+# Sliders
+grid_min, grid_max = st.sidebar.slider("Grid Position", 1, 20, (1, 20))
+final_min, final_max = st.sidebar.slider("Final Position", 1, 20, (1, 20))
+points_min, points_max = st.sidebar.slider("Points", 0, 30, (0, 30))
+
+# ---------------------------------------------------------
+# 4. APPLY FILTERS (REMOVED CIRCUIT/DRIVER/CONSTRUCTOR/STATUS)
+# ---------------------------------------------------------
+filtered_results = results.copy()
+
+# Season filter
+if len(seasons) > 0:
+    filtered_results = filtered_results[
+        filtered_results["season"].isin(seasons)
+    ]
+
+# Numeric filters
+filtered_results = filtered_results[
+    (filtered_results["grid_position"].between(grid_min, grid_max)) &
+    (filtered_results["final_position"].between(final_min, final_max)) &
+    (filtered_results["points"].between(points_min, points_max))
 ]
 
-if status:
-    filtered = filtered[filtered["status"].isin(status)]
-
+# ---------------------------------------------------------
+# 5. SIDEBAR NAVIGATION
+# ---------------------------------------------------------
+page = st.sidebar.radio(
+    "Navigate",
+    [
+        "Executive Summary",
+        "RQ1 — Driver & Constructor Insights",
+        "RQ2 — Race Outcome Analytics",
+        "RQ3 — Circuit Geography",
+        "RQ4 — Sprint Race Analysis",
+        "RQ5 — Cross‑Dataset Insights"
+    ]
+)
 
 # ---------------------------------------------------------
-# RENDER SECTIONS
+# 6. ROUTE TO SELECTED PAGE
 # ---------------------------------------------------------
-render_rq1(filtered)
-render_rq2(filtered)
-render_rq3(filtered)
-render_rq4(filtered)
-render_rq5(filtered)
-render_summary()
+filtered_data = {
+    **data,
+    "results": filtered_results
+}
+
+if page == "Executive Summary":
+    render_executive_summary(filtered_data)
+
+elif page == "RQ1 — Driver & Constructor Insights":
+    render_rq1(filtered_data["results"])
+
+elif page == "RQ2 — Race Outcome Analytics":
+    render_rq2(filtered_data)
+
+elif page == "RQ3 — Circuit Geography":
+    render_rq3(filtered_data)
+
+elif page == "RQ4 — Sprint Race Analysis":
+    render_rq4(filtered_data["results"])
+
+elif page == "RQ5 — Cross‑Dataset Insights":
+    render_rq5(filtered_data)
+
+# ---------------------------------------------------------
+# 7. FOOTER
+# ---------------------------------------------------------
+st.markdown("---")
+st.markdown("### Built by SRH F1 Student Group — F1 Analytics Platform 🚀")

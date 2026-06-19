@@ -1,48 +1,102 @@
 #!/bin/bash
+set -e
 
-# ============================================================
-# RUN ORCHESTRATION — NEW LANDING PIPELINE
-# Uses p_batch_id passed from main.sh
-# ============================================================
-
-BASE_DIR="/Users/manoharazalki/F1-Analytics"
-NB_DIR="$BASE_DIR/notebooks/06-orchestration"
-LOG_DIR="$BASE_DIR/logs/orchestration"
-
-mkdir -p "$LOG_DIR"
-
-BATCH_ID=$1
-
-if [ -z "$BATCH_ID" ]; then
-  echo "❌ ERROR: No batch_id provided to orchestration."
-  exit 1
+# ------------------------------------------------------------
+# 0. Resolve WORKSPACE
+# ------------------------------------------------------------
+if [ -z "$1" ] && [ -z "$WORKSPACE" ]; then
+    echo "❌ ERROR: WORKSPACE not provided."
+    echo "Usage: bash run_orchestration.sh /path/to/F1-Analytics"
+    exit 1
 fi
 
-echo "=============================================="
-echo "🔧 Running Orchestration for batch_id = $BATCH_ID"
-echo "=============================================="
+if [ -n "$1" ]; then
+    export WORKSPACE="$1"
+fi
 
-# -----------------------------------------
-# 1. Create Batch Entry
-# -----------------------------------------
-papermill "$NB_DIR/02.Create New Batch.ipynb" \
-          "$LOG_DIR/create_batch_$BATCH_ID.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+WORKSPACE="${WORKSPACE%/}"
+BASE="$WORKSPACE"
 
-# -----------------------------------------
-# 2. Mark Batch as Identified
-# -----------------------------------------
-papermill "$NB_DIR/01.Identify Next Batch.ipynb" \
-          "$LOG_DIR/identify_batch_$BATCH_ID.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+# ------------------------------------------------------------
+# 1. Setup logs folder + log file
+# ------------------------------------------------------------
+SCRIPTS="$BASE/scripts"
+LOG_DIR="$SCRIPTS/logs"
+mkdir -p "$LOG_DIR"
 
-# -----------------------------------------
-# 3. Complete Batch
-# -----------------------------------------
-papermill "$NB_DIR/03.Complete Batch.ipynb" \
-          "$LOG_DIR/complete_batch_$BATCH_ID.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+TS=$(date +"%Y%m%d_%H%M%S")
+LOG_FILE="$LOG_DIR/orchestration_$TS.log"
 
-echo "=============================================="
-echo "✔ Orchestration Completed"
-echo "=============================================="
+# Everything printed from now on goes to both console + log
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "===================================="
+echo "🚀 Starting Orchestration Pipeline"
+echo "===================================="
+echo "✔ WORKSPACE = $WORKSPACE"
+echo "✔ LOG FILE  = $LOG_FILE"
+echo ""
+
+# ------------------------------------------------------------
+# 2. Define orchestration script paths
+# ------------------------------------------------------------
+ORCH="$BASE/notebooks/06-orchestration"
+
+CREATE_TABLES="$ORCH/00_create_control_tables.py"
+IDENTIFY="$ORCH/01_identify_next_batch.py"
+CREATE="$ORCH/02_create_new_batch.py"
+COMPLETE="$ORCH/03_complete_batch.py"
+
+# ------------------------------------------------------------
+# 3. Ensure control table exists
+# ------------------------------------------------------------
+echo "🔍 Step 1 — Checking control table..."
+python3 "$CREATE_TABLES" --workspace "$WORKSPACE"
+echo ""
+
+# ------------------------------------------------------------
+# 4. Identify next batch
+# ------------------------------------------------------------
+echo "🔍 Step 2 — Identifying next batch..."
+IDENTIFY_OUTPUT=$(python3 "$IDENTIFY" --workspace "$WORKSPACE")
+echo "$IDENTIFY_OUTPUT"
+echo ""
+
+P_BATCH_ID=$(echo "$IDENTIFY_OUTPUT" | grep "p_batch_id" | awk '{print $2}')
+HAS_BATCH=$(echo "$IDENTIFY_OUTPUT" | grep "has_batch" | awk '{print $2}')
+
+if [ "$HAS_BATCH" != "true" ]; then
+    echo "⏹ No READY batch found. Stopping orchestration."
+    exit 0
+fi
+
+echo "✔ Batch detected: $P_BATCH_ID"
+export BATCH_ID="$P_BATCH_ID"
+echo ""
+
+# ------------------------------------------------------------
+# 5. Create new batch entry
+# ------------------------------------------------------------
+echo "📝 Step 3 — Creating new batch entry..."
+python3 "$CREATE" --workspace "$WORKSPACE" --batch_id "$BATCH_ID"
+echo ""
+
+# ------------------------------------------------------------
+# 6. Run pipeline for this batch
+# ------------------------------------------------------------
+echo "🚦 Step 4 — Running pipeline for batch: $BATCH_ID"
+bash "$BASE/scripts/run_pipeline.sh" "$WORKSPACE" "$BATCH_ID" >> "$LOG_FILE" 2>&1
+echo ""
+
+# ------------------------------------------------------------
+# 7. Mark batch as complete
+# ------------------------------------------------------------
+echo "🏁 Step 5 — Completing batch..."
+python3 "$COMPLETE" --workspace "$WORKSPACE" --batch_id "$BATCH_ID"
+echo ""
+
+echo "===================================="
+echo "🎉 Orchestration Completed Successfully"
+echo "Batch: $BATCH_ID"
+echo "Log saved at: $LOG_FILE"
+echo "===================================="

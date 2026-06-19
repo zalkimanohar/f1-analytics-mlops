@@ -1,48 +1,89 @@
 #!/bin/bash
+set -e
 
-# ============================================================
-# MAIN ORCHESTRATOR — NEW LANDING PIPELINE
-# Detects batch_id from data/landing/<batch_id>
-# Runs orchestration → pipeline → dashboard
-# ============================================================
+echo "===================================="
+echo "🏎️  F1 Analytics — MAIN PIPELINE START"
+echo "===================================="
 
-BASE_DIR="/Users/manoharazalki/F1-Analytics"
-SCRIPT_DIR="$BASE_DIR/scripts"
-LANDING_DIR="$BASE_DIR/data/landing"
+# ------------------------------------------------------------
+# 1. Parse arguments
+# ------------------------------------------------------------
+WORKSPACE=""
 
-echo "=============================================="
-echo "🏎️  Starting MAIN Pipeline Execution"
-echo "=============================================="
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        --workspace)
+            WORKSPACE="$2"
+            shift 2
+            ;;
+        *)
+            echo "❌ Unknown parameter: $1"
+            echo "Usage: ./main.sh --workspace <parent-folder>"
+            exit 1
+            ;;
+    esac
+done
 
-# -----------------------------------------
-# 1. Detect latest batch folder
-# -----------------------------------------
-echo "🔍 Detecting latest batch in: $LANDING_DIR"
-
-LATEST_BATCH=$(ls -1t "$LANDING_DIR" | head -n 1)
-
-if [ -z "$LATEST_BATCH" ]; then
-  echo "❌ ERROR: No batch folders found in $LANDING_DIR"
-  exit 1
+# ------------------------------------------------------------
+# 2. Validate WORKSPACE
+# ------------------------------------------------------------
+if [ -z "$WORKSPACE" ]; then
+    echo "❌ ERROR: WORKSPACE not provided."
+    echo "Usage: ./main.sh --workspace <parent-folder>"
+    exit 1
 fi
 
-echo "➡ Detected batch_id: $LATEST_BATCH"
+WORKSPACE="${WORKSPACE%/}"
 
-# -----------------------------------------
-# 2. Run Orchestration
-# -----------------------------------------
-bash "$SCRIPT_DIR/run_orchestration.sh" "$LATEST_BATCH"
+# ------------------------------------------------------------
+# 3. Automatically append F1-Analytics
+# ------------------------------------------------------------
+PROJECT_ROOT="$WORKSPACE/F1-Analytics"
 
-# -----------------------------------------
-# 3. Run Pipeline
-# -----------------------------------------
-bash "$SCRIPT_DIR/run_pipeline.sh" "$LATEST_BATCH"
+echo "✔ WORKSPACE (parent) = $WORKSPACE"
+echo "✔ PROJECT ROOT       = $PROJECT_ROOT"
+echo ""
 
-# -----------------------------------------
-# 4. Start Dashboard
-# -----------------------------------------
-bash "$SCRIPT_DIR/run_dashboard.sh"
+# ------------------------------------------------------------
+# 4. Validate scripts folder
+# ------------------------------------------------------------
+SCRIPTS="$PROJECT_ROOT/scripts"
+LOG_DIR="$SCRIPTS/logs"
 
-echo "=============================================="
-echo "🎉 MAIN Pipeline Completed Successfully"
-echo "=============================================="
+if [ ! -d "$SCRIPTS" ]; then
+    echo "❌ ERROR: scripts folder missing at:"
+    echo "   $SCRIPTS"
+    exit 1
+fi
+
+# ------------------------------------------------------------
+# 5. CLEAN LOGS BEFORE EXECUTION
+# ------------------------------------------------------------
+echo "🧹 Cleaning old logs..."
+rm -rf "$LOG_DIR"
+mkdir -p "$LOG_DIR"
+echo "✔ Fresh logs folder created at: $LOG_DIR"
+echo ""
+
+chmod +x "$SCRIPTS"/*.sh || true
+
+# ------------------------------------------------------------
+# 6. Run orchestration
+# ------------------------------------------------------------
+echo "🚦 Running Orchestration..."
+bash "$SCRIPTS/run_orchestration.sh" "$PROJECT_ROOT"
+
+# ------------------------------------------------------------
+# 7. Run dashboard
+# ------------------------------------------------------------
+echo ""
+echo "🖥️  Launching Dashboard..."
+bash "$SCRIPTS/run_dashboard.sh" --workspace "$PROJECT_ROOT"
+
+# ------------------------------------------------------------
+# 8. Done
+# ------------------------------------------------------------
+echo ""
+echo "===================================="
+echo "🎉 MAIN PIPELINE COMPLETED SUCCESSFULLY"
+echo "===================================="

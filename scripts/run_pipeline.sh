@@ -1,103 +1,127 @@
 #!/bin/bash
+set -e
 
-# ============================================================
-# RUN PIPELINE — NEW LANDING PIPELINE
-# Reads from data/landing/<batch_id>
-# Writes to bronze/silver/gold
-# ============================================================
-
-BASE_DIR="/Users/manoharazalki/F1-Analytics"
-NB_DIR="$BASE_DIR/notebooks"
-LOG_ROOT="$BASE_DIR/logs/pipeline"
-
-BATCH_ID=$1
-
-if [ -z "$BATCH_ID" ]; then
-  echo "❌ ERROR: No batch_id provided to pipeline."
-  exit 1
+# ------------------------------------------------------------
+# 0. Validate args
+# ------------------------------------------------------------
+if [ -z "$1" ] || [ -z "$2" ]; then
+    echo "❌ ERROR: Usage: bash run_pipeline.sh <WORKSPACE> <BATCH_ID>"
+    exit 1
 fi
 
-LOG_DIR="$LOG_ROOT/$BATCH_ID"
-mkdir -p "$LOG_DIR"
+WORKSPACE="${WORKSPACE%/}"
+BASE="$WORKSPACE"
+export BATCH_ID="$2"
+BASE="$WORKSPACE"
 
-echo "=============================================="
-echo "🚀 Running Pipeline for batch_id = $BATCH_ID"
-echo "Logs: $LOG_DIR"
-echo "=============================================="
+# ------------------------------------------------------------
+# 1. Setup logs folder + log file
+# ------------------------------------------------------------
+SCRIPTS="$BASE/scripts"
+LOG_ROOT="$SCRIPTS/logs"
+PIPELINE_LOG_DIR="$LOG_ROOT/pipeline/$BATCH_ID"
+mkdir -p "$PIPELINE_LOG_DIR"
 
-# -------------------------
-# Bronze
-# -------------------------
-papermill "$NB_DIR/02-bronze/01_ingest_circuits.ipynb" \
-          "$LOG_DIR/bronze_circuits.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+TS=$(date +"%Y%m%d_%H%M%S")
+MASTER_LOG="$LOG_ROOT/pipeline_${BATCH_ID}_${TS}.log"
 
-papermill "$NB_DIR/02-bronze/02_ingest_races.ipynb" \
-          "$LOG_DIR/bronze_races.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+# Redirect ALL output to log + console
+exec > >(tee -a "$MASTER_LOG") 2>&1
 
-papermill "$NB_DIR/02-bronze/03_ingest_drivers.ipynb" \
-          "$LOG_DIR/bronze_drivers.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+echo "===================================="
+echo "🏎️  Starting F1 Pipeline (Bronze → Silver → Gold)"
+echo "===================================="
+echo "✔ WORKSPACE = $WORKSPACE"
+echo "✔ BATCH_ID  = $BATCH_ID"
+echo "✔ MASTER LOG = $MASTER_LOG"
+echo "✔ STEP LOGS  = $PIPELINE_LOG_DIR"
+echo ""
 
-papermill "$NB_DIR/02-bronze/04_ingest_constructors.ipynb" \
-          "$LOG_DIR/bronze_constructors.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+# ------------------------------------------------------------
+# 2. Define script paths
+# ------------------------------------------------------------
+BRONZE="$BASE/notebooks/02-bronze"
+SILVER="$BASE/notebooks/03-silver"
+GOLD="$BASE/notebooks/04-gold"
 
-papermill "$NB_DIR/02-bronze/05_ingest_results.ipynb" \
-          "$LOG_DIR/bronze_results.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+echo "✔ Using script directories:"
+echo "  BRONZE = $BRONZE"
+echo "  SILVER = $SILVER"
+echo "  GOLD   = $GOLD"
+echo ""
 
-papermill "$NB_DIR/02-bronze/06_ingest_sprints.ipynb" \
-          "$LOG_DIR/bronze_sprints.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+# ------------------------------------------------------------
+# Helper: run python script with NO positional args
+# ------------------------------------------------------------
+run_py () {
+    local script_path="$1"
+    local log_path="$2"
 
-# -------------------------
-# Silver
-# -------------------------
-papermill "$NB_DIR/03-silver/01_transform_circuits.ipynb" \
-          "$LOG_DIR/silver_circuits.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+    echo "▶ Running: $(basename "$script_path")"
 
-papermill "$NB_DIR/03-silver/02_transform_races.ipynb" \
-          "$LOG_DIR/silver_races.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+    WORKSPACE="$WORKSPACE" BATCH_ID="$BATCH_ID" \
+    python3 "$script_path" 2>&1 | tee "$log_path"
 
-papermill "$NB_DIR/03-silver/03_transform_drivers.ipynb" \
-          "$LOG_DIR/silver_drivers.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+    echo "✔ Completed: $(basename "$script_path")"
+    echo ""
+}
 
-papermill "$NB_DIR/03-silver/04_transform_constructors.ipynb" \
-          "$LOG_DIR/silver_constructors.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+# ------------------------------------------------------------
+# 3. Bronze Layer
+# ------------------------------------------------------------
+echo "------------------------------------"
+echo "🥉 Running BRONZE Layer"
+echo "------------------------------------"
 
-papermill "$NB_DIR/03-silver/05_transform_results.ipynb" \
-          "$LOG_DIR/silver_results.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+run_py "$BRONZE/01_ingest_circuits.py"      "$PIPELINE_LOG_DIR/bronze_01.log"
+run_py "$BRONZE/02_ingest_races.py"         "$PIPELINE_LOG_DIR/bronze_02.log"
+run_py "$BRONZE/03_ingest_drivers.py"       "$PIPELINE_LOG_DIR/bronze_03.log"
+run_py "$BRONZE/04_ingest_constructors.py"  "$PIPELINE_LOG_DIR/bronze_04.log"
+run_py "$BRONZE/05_ingest_results.py"       "$PIPELINE_LOG_DIR/bronze_05.log"
+run_py "$BRONZE/06_ingest_sprints.py"       "$PIPELINE_LOG_DIR/bronze_06.log"
 
-papermill "$NB_DIR/03-silver/06_transform_sprints.ipynb" \
-          "$LOG_DIR/silver_sprints.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+echo "✔ Bronze layer completed"
+echo ""
 
-# -------------------------
-# Gold
-# -------------------------
-papermill "$NB_DIR/04-gold/01_build_dim_races.ipynb" \
-          "$LOG_DIR/gold_dim_races.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+# ------------------------------------------------------------
+# 4. Silver Layer
+# ------------------------------------------------------------
+echo "------------------------------------"
+echo "🥈 Running SILVER Layer"
+echo "------------------------------------"
 
-papermill "$NB_DIR/04-gold/02_build_dim_drivers.ipynb" \
-          "$LOG_DIR/gold_dim_drivers.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+run_py "$SILVER/01_transform_circuits.py"      "$PIPELINE_LOG_DIR/silver_01.log"
+run_py "$SILVER/02_transform_races.py"         "$PIPELINE_LOG_DIR/silver_02.log"
+run_py "$SILVER/03_transform_drivers.py"       "$PIPELINE_LOG_DIR/silver_03.log"
+run_py "$SILVER/04_transform_constructors.py"  "$PIPELINE_LOG_DIR/silver_04.log"
+run_py "$SILVER/05_transform_results.py"       "$PIPELINE_LOG_DIR/silver_05.log"
+run_py "$SILVER/06_transform_sprints.py"       "$PIPELINE_LOG_DIR/silver_06.log"
 
-papermill "$NB_DIR/04-gold/03_build_dim_constructors.ipynb" \
-          "$LOG_DIR/gold_dim_constructors.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+echo "✔ Silver layer completed"
+echo ""
 
-papermill "$NB_DIR/04-gold/04_build_fact_results.ipynb" \
-          "$LOG_DIR/gold_fact_results.ipynb" \
-          -p p_batch_id "$BATCH_ID"
+# ------------------------------------------------------------
+# 5. Gold Layer
+# ------------------------------------------------------------
+echo "------------------------------------"
+echo "🥇 Running GOLD Layer"
+echo "------------------------------------"
 
-echo "=============================================="
-echo "🎉 Pipeline Completed for batch_id = $BATCH_ID"
-echo "=============================================="
+run_py "$GOLD/01_build_dim_races.py"               "$PIPELINE_LOG_DIR/gold_01.log"
+run_py "$GOLD/02_build_dim_drivers.py"             "$PIPELINE_LOG_DIR/gold_02.log"
+run_py "$GOLD/03_build_dim_constructors.py"        "$PIPELINE_LOG_DIR/gold_03.log"
+run_py "$GOLD/04_build_fact_session_results.py"    "$PIPELINE_LOG_DIR/gold_04.log"
+run_py "$GOLD/91_build_ref_nationality_region.py"  "$PIPELINE_LOG_DIR/gold_05.log"
+
+echo "✔ Gold layer completed"
+echo ""
+
+# ------------------------------------------------------------
+# 6. Final Output
+# ------------------------------------------------------------
+echo "===================================="
+echo "🎉 Pipeline Completed Successfully"
+echo "Batch: $BATCH_ID"
+echo "Step logs:   $PIPELINE_LOG_DIR"
+echo "Master log:  $MASTER_LOG"
+echo "===================================="

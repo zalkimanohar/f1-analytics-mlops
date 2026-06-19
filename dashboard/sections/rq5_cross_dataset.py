@@ -1,181 +1,149 @@
-# dashboard/sections/rq5_cross_dataset.py
-
 import streamlit as st
 import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
-from utils import f1_fig
 
-def render_rq5(df: pd.DataFrame):
-    st.markdown("## 🟧 RQ5 — ADVANCED CROSS‑DATASET INSIGHTS")
+def render_rq5(data):
+    st.title("🔗 RQ5 — Cross‑Dataset Insights")
 
-    if df.empty:
-        st.info("No data available for current filters in RQ5.")
+    # GOLD tables
+    results = data["results"].copy()      # fact_session_results
+    races = data["races"].copy()          # dim_races
+    circuits = data["circuits"].copy()    # dim_circuits
+
+    # ---------------------------------------------------------
+    # VALIDATION
+    # ---------------------------------------------------------
+    if results.empty:
+        st.error("❌ Missing fact_session_results table. Run Gold pipeline first.")
         return
 
     # ---------------------------------------------------------
-    # KPI TILES — CROSS‑DATASET SNAPSHOT
+    # MERGE EVERYTHING INTO ONE MASTER DATAFRAME
     # ---------------------------------------------------------
-    col1, col2, col3 = st.columns(3)
-
-    avg_points = df["points"].mean()
-    top_driver = df.groupby("driver_name")["points"].mean().idxmax()
-    top_constructor = df.groupby("constructor_name")["points"].mean().idxmax()
-
-    with col1:
-        st.metric("Avg Points per Entry", f"{avg_points:0.2f}")
-    with col2:
-        st.metric("Top Driver (Avg Points)", top_driver)
-    with col3:
-        st.metric("Top Constructor (Avg Points)", top_constructor)
-
-    st.markdown("---")
-
-    # ---------------------------------------------------------
-    # RQ5.1 — Driver × Constructor × Circuit Heatmap
-    # ---------------------------------------------------------
-    st.markdown("### 📌 RQ5.1 — Driver × Constructor × Circuit Heatmap")
-
-    heat = (
-        df.groupby(["driver_name", "constructor_name", "circuit_name"], as_index=False)["points"]
-        .mean()
+    df = (
+        results
+        .merge(races[["season", "round", "race_name", "race_date", "circuit_id"]], 
+               on=["season", "round"], how="left")
+        .merge(circuits[["circuit_id", "circuit_name", "country_name"]], 
+               on="circuit_id", how="left")
     )
 
-    if not heat.empty:
-        fig1 = px.density_heatmap(
-            heat,
-            x="constructor_name",
-            y="driver_name",
-            z="points",
-            color_continuous_scale="Turbo",
-            title="Driver × Constructor × Circuit (Avg Points)",
-        )
-
-        fig1.update_layout(
-            template="plotly_dark",
-            height=600,
-            xaxis_title="Constructor",
-            yaxis_title="Driver",
-        )
-
-        st.plotly_chart(fig1, use_container_width=True)
-    else:
-        st.info("No heatmap data available for current filters.")
-
     # ---------------------------------------------------------
-    # RQ5.2 — Season Trend Lines (Constructor Points)
+    # PERFORMANCE INDEX (Weighted)
     # ---------------------------------------------------------
-    st.markdown("### 📌 RQ5.2 — Season Trend Lines (Constructor Points)")
+    st.subheader("🔥 Weighted Performance Index (Race + Sprint)")
 
-    season_trend = (
-        df.groupby(["season", "constructor_name"], as_index=False)["points"]
+    df["is_win"] = (df["final_position"] == 1).astype(int)
+    df["is_podium"] = (df["final_position"] <= 3).astype(int)
+
+    df["performance_index"] = (
+        df["points"]
+        + df["is_win"] * 10
+        + df["is_podium"] * 5
+    )
+
+    perf = (
+        df.groupby("driver_name", dropna=False)["performance_index"]
         .sum()
+        .reset_index()
+        .sort_values("performance_index", ascending=False)
     )
 
-    if not season_trend.empty:
-        fig2 = f1_fig("Constructor Season Trend Lines", height=500)
-
-        for constructor in season_trend["constructor_name"].unique():
-            sub = season_trend[season_trend["constructor_name"] == constructor]
-            fig2.add_trace(
-                go.Scatter(
-                    x=sub["season"],
-                    y=sub["points"],
-                    mode="lines+markers",
-                    name=constructor,
-                    hovertemplate="<b>%{x}</b><br>Points: %{y}<extra></extra>"
-                )
-            )
-
-        fig2.update_layout(
-            xaxis_title="Season",
-            yaxis_title="Total Points",
-        )
-
-        st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.info("No season trend data available.")
+    fig = px.bar(
+        perf.head(15),
+        x="driver_name",
+        y="performance_index",
+        title="Top Drivers by Weighted Performance Index",
+        color="performance_index",
+        color_continuous_scale="Teal",
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
     # ---------------------------------------------------------
-    # RQ5.3 — Constructor–Driver Synergy Score
+    # DRIVER–CIRCUIT PERFORMANCE MATRIX
     # ---------------------------------------------------------
-    st.markdown("### 📌 RQ5.3 — Constructor–Driver Synergy Score")
+    st.subheader("🌍 Driver–Circuit Performance Matrix")
 
-    synergy = (
-        df.groupby(["driver_name", "constructor_name"], as_index=False)["points"]
-        .mean()
-        .rename(columns={"points": "synergy_score"})
-        .sort_values("synergy_score", ascending=False)
+    circuit_matrix = (
+        df.groupby(["driver_name", "circuit_name"], dropna=False)["points"]
+        .sum()
+        .reset_index()
     )
 
-    fig3 = f1_fig("Constructor–Driver Synergy Score", height=550)
+    fig2 = px.density_heatmap(
+        circuit_matrix,
+        x="circuit_name",
+        y="driver_name",
+        z="points",
+        title="Driver–Circuit Points Heatmap",
+        color_continuous_scale="Magma",
+    )
+    st.plotly_chart(fig2, use_container_width=True)
 
-    fig3.add_trace(
-        go.Bar(
-            x=synergy["synergy_score"].head(20),
-            y=synergy["driver_name"].head(20),
-            orientation="h",
-            marker=dict(
-                color=synergy["synergy_score"].head(20),
-                colorscale="Viridis"
-            ),
-            hovertemplate="<b>%{y}</b><br>Synergy Score: %{x:.2f}<extra></extra>"
-        )
+    # ---------------------------------------------------------
+    # CONSTRUCTOR–CIRCUIT SYNERGY
+    # ---------------------------------------------------------
+    st.subheader("🏗️ Constructor–Circuit Synergy")
+
+    constructor_circuit = (
+        df.groupby(["constructor_name", "circuit_name"], dropna=False)["points"]
+        .sum()
+        .reset_index()
     )
 
-    fig3.update_layout(
-        xaxis_title="Avg Points Together",
-        yaxis_title="Driver",
+    fig3 = px.scatter(
+        constructor_circuit,
+        x="circuit_name",
+        y="constructor_name",
+        size="points",
+        color="points",
+        title="Constructor–Circuit Synergy (Points)",
+        color_continuous_scale="Viridis",
     )
-
     st.plotly_chart(fig3, use_container_width=True)
 
     # ---------------------------------------------------------
-    # RQ5.4 — Circuit Difficulty Index
+    # NATIONALITY‑BASED PERFORMANCE
     # ---------------------------------------------------------
-    st.markdown("### 📌 RQ5.4 — Circuit Difficulty Index")
+    st.subheader("🌎 Nationality‑Based Performance")
 
-    difficulty = (
-        df.groupby("circuit_name")["final_position"]
-        .std()
+    nationality_perf = (
+        df.groupby("driver_nationality", dropna=False)["points"]
+        .sum()
         .reset_index()
-        .rename(columns={"final_position": "difficulty_index"})
-        .sort_values("difficulty_index", ascending=False)
+        .sort_values("points", ascending=False)
     )
 
-    fig4 = f1_fig("Circuit Difficulty Index (Higher = More Variable Outcomes)", height=550)
-
-    fig4.add_trace(
-        go.Bar(
-            x=difficulty["difficulty_index"].head(20),
-            y=difficulty["circuit_name"].head(20),
-            orientation="h",
-            marker=dict(
-                color=difficulty["difficulty_index"].head(20),
-                colorscale="Plasma"
-            ),
-            hovertemplate="<b>%{y}</b><br>Difficulty Index: %{x:.2f}<extra></extra>"
-        )
+    fig4 = px.bar(
+        nationality_perf,
+        x="driver_nationality",
+        y="points",
+        title="Driver Nationality — Total Points",
+        color="points",
+        color_continuous_scale="Inferno",
     )
-
-    fig4.update_layout(
-        xaxis_title="Difficulty Index (Std Dev of Final Position)",
-        yaxis_title="Circuit",
-    )
-
     st.plotly_chart(fig4, use_container_width=True)
 
     # ---------------------------------------------------------
-    # RQ5 — Insights
+    # SEASON‑WISE PERFORMANCE TREND
     # ---------------------------------------------------------
-    st.markdown("### 🧠 RQ5 — Key Insights")
+    st.subheader("📈 Season‑Wise Performance Trend")
 
-    st.success(
-        """
-        - The **Driver × Constructor × Circuit heatmap** reveals performance hotspots and weak combinations.  
-        - Season trend lines highlight constructors with **consistent year‑on‑year improvement**.  
-        - The **Synergy Score** identifies driver–constructor pairings that extract maximum performance together.  
-        - The **Circuit Difficulty Index** shows which tracks produce unpredictable outcomes.  
-        - RQ5 ties together all datasets to uncover **deep, multi‑layered performance patterns**.  
-        """
+    season_trend = (
+        df.groupby("season", dropna=False)["points"]
+        .sum()
+        .reset_index()
+        .sort_values("season")
     )
+
+    fig5 = px.line(
+        season_trend,
+        x="season",
+        y="points",
+        title="Total Points Awarded per Season",
+        markers=True,
+        color_discrete_sequence=["#ff1e00"],
+    )
+    st.plotly_chart(fig5, use_container_width=True)
+
+    st.success("RQ5 analysis loaded successfully.")

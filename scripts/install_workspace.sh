@@ -1,100 +1,86 @@
 #!/bin/bash
 
-# ============================================================
-# F1-Analytics — WORKSPACE INSTALLATION SCRIPT (LOCAL)
-# Installs all dependencies required for pipeline + dashboard
-# ============================================================
-
 echo "=============================================="
-echo "🏎️  Installing F1-Analytics Workspace"
+echo "🔧 Installing Workspace Dependencies (CLEAN MODE)"
 echo "=============================================="
 
-BASE_DIR="/Users/manoharazalki/F1-Analytics"
+BASE="/Users/manoharazalki/F1-Analytics"
+LOG_DIR="$BASE/scripts/logs"
 
-# -----------------------------------------
-# 1. Check Python
-# -----------------------------------------
-echo "🔍 Checking Python installation..."
-
-if ! command -v python3 &> /dev/null
-then
-    echo "❌ Python3 not found. Please install Python 3.9+ and rerun."
+# ---------------------------------------------------------
+# 1. VERIFY PYTHON
+# ---------------------------------------------------------
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "❌ Python3 not found. Install Python first."
     exit 1
+else
+    echo "✔ Python3 OK: $(python3 --version)"
 fi
 
-echo "✔ Python3 found: $(python3 --version)"
+# ---------------------------------------------------------
+# 2. VERIFY PIP
+# ---------------------------------------------------------
+if ! command -v pip3 >/dev/null 2>&1; then
+    echo "❌ pip3 not found. Install pip first."
+    exit 1
+else
+    echo "✔ pip3 OK: $(pip3 --version)"
+fi
 
-# -----------------------------------------
-# 2. Create Virtual Environment
-# -----------------------------------------
-echo "🔧 Creating virtual environment (f1env)..."
+# ---------------------------------------------------------
+# 3. VERIFY / INSTALL PYTHON LIBRARIES
+# ---------------------------------------------------------
+echo "🔍 Checking Python libraries..."
 
-python3 -m venv "$BASE_DIR/f1env"
-source "$BASE_DIR/f1env/bin/activate"
+# papermill
+if python3 -c "import papermill" 2>/dev/null; then
+    echo "✔ papermill OK"
+else
+    echo "📦 Installing papermill..."
+    pip3 install papermill
+fi
 
-echo "✔ Virtual environment activated"
+# pyspark
+if python3 -c "import pyspark" 2>/dev/null; then
+    echo "✔ pyspark OK"
+else
+    echo "📦 Installing pyspark..."
+    pip3 install pyspark
+fi
 
-# -----------------------------------------
-# 3. Upgrade pip
-# -----------------------------------------
-echo "⬆ Upgrading pip..."
-pip install --upgrade pip
+# ---------------------------------------------------------
+# 4. ENSURE LOGS FOLDER EXISTS (ONLY THIS FOLDER)
+# ---------------------------------------------------------
+if [ ! -d "$LOG_DIR" ]; then
+    echo "📁 Creating logs folder..."
+    mkdir -p "$LOG_DIR"
+else
+    echo "✔ logs folder exists"
+fi
 
-# -----------------------------------------
-# 4. Install Required Libraries
-# -----------------------------------------
-echo "📦 Installing required Python libraries..."
+# ---------------------------------------------------------
+# 5. VALIDATE WORKSPACE STRUCTURE (NO CREATION)
+# ---------------------------------------------------------
+echo "🔍 Validating workspace structure..."
 
-pip install pyspark
-pip install pandas
-pip install papermill
-pip install streamlit
-pip install pyarrow
-pip install notebook
-pip install jupyter
-
-# Dashboard dependencies
-pip install plotly
-pip install plotly-express
-pip install numpy
-pip install seaborn
-
-echo "✔ All required libraries installed"
-
-# -----------------------------------------
-# 5. Validate Folder Structure
-# -----------------------------------------
-echo "📁 Validating workspace folder structure..."
-
-REQUIRED_DIRS=(
-    "$BASE_DIR/data"
-    "$BASE_DIR/data/landing"
-    "$BASE_DIR/data/bronze"
-    "$BASE_DIR/data/silver"
-    "$BASE_DIR/data/gold"
-    "$BASE_DIR/data/control"
-    "$BASE_DIR/notebooks"
-    "$BASE_DIR/scripts"
-    "$BASE_DIR/logs"
+REQUIRED_FOLDERS=(
+    "$BASE/notebooks"
+    "$BASE/notebooks/bronze"
+    "$BASE/notebooks/silver"
+    "$BASE/notebooks/gold"
+    "$BASE/dashboard"
+    "$BASE/scripts"
+    "$BASE/data"
 )
 
-for DIR in "${REQUIRED_DIRS[@]}"; do
-    if [ ! -d "$DIR" ]; then
-        echo "📂 Creating missing directory: $DIR"
-        mkdir -p "$DIR"
+for folder in "${REQUIRED_FOLDERS[@]}"; do
+    if [ -d "$folder" ]; then
+        echo "✔ Found: $folder"
+    else
+        echo "⚠️ Missing: $folder (Not creating — CLEAN MODE)"
     fi
 done
 
-echo "✔ Folder structure validated"
-
-# -----------------------------------------
-# 6. Final Summary
-# -----------------------------------------
 echo "=============================================="
-echo "🎉 Workspace Setup Complete!"
-echo "Activate environment using:"
-echo "   source f1env/bin/activate"
-echo ""
-echo "Run the full pipeline using:"
-echo "   bash scripts/main.sh"
+echo "✔ Workspace Ready (NO new folders created)"
 echo "=============================================="

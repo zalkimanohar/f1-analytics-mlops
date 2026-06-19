@@ -161,14 +161,17 @@ notebooks/00-common/01_environment_config.ipynb
 
 ### Recommended (fully automated)
 
-bash scripts/main.sh
+bash main.sh --workspace "/Users/manoharazalki"
 
 
 ### Manual batch run
 
-bash scripts/run_pipeline.sh 20250101_090000
+export WORKSPACE="/Users/manoharazalki/F1-Analytics"
+export BATCH_ID="2025-02"
 
-
+bash scripts/run_orchestration.sh
+bash scripts/run_pipeline.sh
+bash scripts/run_dashboard.sh
 ---
 
 ## 🏷️ Versioning
