@@ -1,0 +1,23 @@
+artifact_path: /Users/manoharazalki/F1-Analytics/mlruns/1/models/m-fa337f2f31cc4c8d84f55bfedbcc4127/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.13.9
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.7.2
+    skops_trusted_types: null
+mlflow_version: 3.13.0
+model_id: m-fa337f2f31cc4c8d84f55bfedbcc4127
+model_size_bytes: 3767526
+model_uuid: m-fa337f2f31cc4c8d84f55bfedbcc4127
+prompts: null
+run_id: 7854e1a051054281a8ce2568bfcf8cc8
+utc_time_created: '2026-06-27 15:08:06.282648'

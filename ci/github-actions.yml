@@ -1,0 +1,35 @@
+name: F1-Analytics CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  ml-data-pipeline-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r api/requirements.txt
+          pip install pytest pandas pyarrow mlflow joblib scikit-learn
+
+      - name: Run ML Data Prep (Phase-1)
+        run: python ml/data_prep/build_f1_ml_table.py
+
+      - name: Run Model Training (Phase-2)
+        run: python ml/training/train_f1_model.py
+
+      - name: Run ML Unit Tests
+        run: pytest ml

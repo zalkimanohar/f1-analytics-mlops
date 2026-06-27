@@ -1,0 +1,11 @@
+# config/ml_tasks.yaml
+tasks:
+  podium_prediction:
+    label_column: is_podium
+    grain: driver_race_session
+    source_tables:
+      - dim_drivers
+      - dim_constructors
+      - dim_races
+      - fact_session_results
+
